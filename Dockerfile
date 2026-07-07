@@ -14,8 +14,8 @@ RUN npm install --omit=dev && npm cache clean --force
 # Copiar código fuente
 COPY src/ ./src/
 
-# Crear directorio de logs con permisos correctos
-RUN mkdir -p /app/logs
+# Crear directorio de logs con permisos para usuario node
+RUN mkdir -p /app/logs && chown node:node /app/logs
 
 # Healthcheck para orquestadores (Docker Compose, Swarm, K8s)
 HEALTHCHECK --interval=30s --timeout=5s --start-period=10s --retries=3 \
