@@ -30,6 +30,8 @@ services:
       # - ./ssl/client-key.pem:/certs/client-key.pem:ro
     ports:
       - "${PORT:-3005}:3000"
+    # Iniciar en modo HTTP para que el healthcheck funcione
+    command: ["node", "src/index.js", "--http", "3000"]
     # Red para comunicarse con MariaDB (adaptador tipo host)
     network_mode: ${NETWORK_MODE:-bridge}
     extra_hosts:
