@@ -9,7 +9,7 @@ RUN apk add --no-cache dumb-init
 
 # Copiar e instalar dependencias primero (cache layer)
 COPY package*.json ./
-RUN npm ci --omit=dev && npm cache clean --force
+RUN npm install --omit=dev && npm cache clean --force
 
 # Copiar código fuente
 COPY src/ ./src/
