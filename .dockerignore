@@ -1,0 +1,37 @@
+# Dependencias (se instalan dentro del contenedor)
+node_modules/
+
+# Variables de entorno (sensibles, se pasan via docker-compose)
+.env
+.env.local
+.env.*.local
+
+# Logs del host
+logs/
+
+# Certificados SSL (se montan como volumen si se necesitan)
+ssl/
+
+# Documentación y metadatos
+README.md
+LICENSE
+.git/
+.gitignore
+.dockerignore
+
+# IDEs y editores
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# Sistema operativo
+.DS_Store
+Thumbs.db
+
+# Archivos temporales
+*.tmp
+*.bak
+*.log
+pnpm-lock.yaml

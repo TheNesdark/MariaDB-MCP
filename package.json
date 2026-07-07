@@ -1,0 +1,35 @@
+{
+  "name": "mariadb-mcp-js",
+  "version": "1.0.0",
+  "description": "MariaDB MCP Server in JavaScript (stdio and HTTP transports)",
+  "main": "src/index.js",
+  "type": "module",
+  "scripts": {
+    "start": "node src/index.js",
+    "dev": "node --watch src/index.js",
+    "build": "echo 'No build step needed for plain JS'",
+    "test": "echo 'Tests not implemented yet'"
+  },
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "mariadb",
+    "mysql",
+    "database",
+    "tools"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^0.6.1",
+    "dotenv": "^16.4.5",
+    "exceljs": "^4.4.0",
+    "mysql2": "^3.11.0",
+    "winston": "^3.14.2",
+    "winston-daily-rotate-file": "^5.0.0",
+    "zod": "^3.23.8"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  }
+}
