@@ -56,7 +56,7 @@ function stripStringLiterals(sql) {
 // ==================== MariaDB MCP Server ====================
 
 export class MariaDBServer {
-  constructor(serverName = 'mariadb-mcp-server') {
+  constructor(serverName = 'MariaDB-MCP') {
     this.serverName = serverName;
     this.pool = null;
     this.isReadOnly = MCP_READ_ONLY;

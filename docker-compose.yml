@@ -1,7 +1,7 @@
 services:
   mcp-server:
     build: .
-    container_name: genoma-mcp
+    container_name: MariaDB-MCP
     restart: unless-stopped
     env_file: .env
     environment:
@@ -41,9 +41,9 @@ services:
       start_period: 10s
       retries: 3
 
-  ## Para usar con Hermes Agent via stdio (ejecutar una sola vez):
+  ## Para usar via stdio (ejecutar una sola vez):
   ##   docker compose run --rm mcp-server
   ##
   ## Para HTTP (servidor permanente):
   ##   docker compose up -d
-  ##   Luego configurar Hermes con url: http://localhost:3000
+  ##   Luego configurar el cliente MCP con url: http://localhost:3000

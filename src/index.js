@@ -48,7 +48,7 @@ Variables de entorno requeridas:
 
 async function main() {
   const { mode, port } = parseArgs();
-  const server = new MariaDBServer('mariadb-mcp-server');
+  const server = new MariaDBServer('MariaDB-MCP');
 
   try {
     if (mode === 'stdio') {
@@ -56,7 +56,7 @@ async function main() {
     } else if (mode === 'http') {
       await server.runHttp(port);
       // Bloquear proceso para mantener servidor vivo
-      await new Promise(() => {});
+      await new Promise(() => { });
     }
   } catch (error) {
     logger.error('Error fatal iniciando servidor MCP:', error);

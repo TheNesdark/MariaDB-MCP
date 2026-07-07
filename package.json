@@ -1,5 +1,5 @@
 {
-  "name": "mariadb-mcp-js",
+  "name": "MariaDB-MCP",
   "version": "1.0.0",
   "description": "MariaDB MCP Server in JavaScript (stdio and HTTP transports)",
   "main": "src/index.js",

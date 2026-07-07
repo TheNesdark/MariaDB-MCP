@@ -2,8 +2,6 @@
 
 Servidor MCP escrito en **Node.js / JavaScript** para interactuar con bases de datos **MariaDB/MySQL**.
 
-> **Nota:** Este servidor NO incluye funcionalidad de *embeddings* ni *vector stores*. Si necesita soporte de vectores, use la implementación en Python del repositorio principal.
-
 ## Características
 
 - **Transporte stdio** compatible con el protocolo MCP (Model Context Protocol).
@@ -33,8 +31,8 @@ Servidor MCP escrito en **Node.js / JavaScript** para interactuar con bases de d
 ## Instalación
 
 ```bash
-# Clonar o copiar la carpeta mcp-js
-cd mcp-js
+# Clonar o copiar la carpeta MariaDB-MCP
+cd MariaDB-MCP
 
 # Instalar dependencias
 npm install
@@ -116,7 +114,7 @@ docker-compose up -d mcp-server
 ## Estructura del proyecto
 
 ```
-mcp-js/
+MariaDB-MCP/
 ├── src/
 │   ├── index.js      # Punto de entrada y CLI
 │   ├── server.js     # Lógica MCP, pool y herramientas
