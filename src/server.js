@@ -1,5 +1,6 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
+import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema
@@ -359,9 +360,13 @@ export class MariaDBServer {
 
   // ---------- Definición de herramientas MCP ----------
 
-  registerTools() {
+  /**
+   * Registra las herramientas MCP en el servidor dado.
+   * Cada sesión HTTP/SSE crea su propio servidor MCP compartiendo el pool de BD.
+   */
+  registerTools(server = this.server) {
     // Listado de herramientas
-    this.server.setRequestHandler(ListToolsRequestSchema, async () => ({
+    server.setRequestHandler(ListToolsRequestSchema, async () => ({
       tools: [
         {
           name: 'list_databases',
@@ -437,7 +442,7 @@ export class MariaDBServer {
     }));
 
     // Ejecutor de herramientas
-    this.server.setRequestHandler(CallToolRequestSchema, async (request) => {
+    server.setRequestHandler(CallToolRequestSchema, async (request) => {
       const { name, arguments: args } = request.params;
       logger.info(`TOOL START: ${name} llamado con argumentos:`, args);
 
@@ -634,34 +639,57 @@ export class MariaDBServer {
   }
 
   /**
-   * Inicia el servidor MCP por HTTP con endpoint /health para orquestadores.
+   * Crea un servidor MCP nuevo para una sesión cliente concreta.
+   * Cada sesión SSE obtiene su propio servidor MCP, compartiendo el pool de BD.
+   */
+  _createSessionServer() {
+    const server = new Server(
+      { name: this.serverName, version: '1.0.0' },
+      { capabilities: { tools: {} } }
+    );
+    server.onerror = (error) => {
+      logger.error('Error en sesión MCP:', error);
+    };
+    this.registerTools(server);
+    return server;
+  }
+
+  /**
+   * Inicia el servidor MCP por HTTP/SSE con endpoint /health para orquestadores.
    * Expone:
-   *   GET /health  → estado del servidor y pool de conexiones
-   *   POST /mcp    → reservado para futuro transporte MCP over HTTP
+   *   GET  /health             → estado del servidor y pool de conexiones
+   *   GET  /sse                → abre el stream SSE para una sesión cliente
+   *   POST /messages?sessionId → recibe mensajes JSON-RPC del cliente
    */
   async runHttp(port = 3000) {
     await this.initializePool();
-    this.registerTools();
 
     const allowedOrigins = getAllowedOrigins();
-    const allowedHosts = getAllowedHosts();
 
-    const httpServer = http.createServer(async (req, res) => {
-      // CORS headers
+    // Sesiones SSE activas: sessionId -> { transport, server }
+    const sessions = new Map();
+
+    /** Aplica cabeceras CORS y responde OPTIONS. Devuelve true si ya respondió. */
+    const applyCors = (req, res) => {
       const origin = req.headers.origin || '';
       if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
         res.setHeader('Access-Control-Allow-Origin', origin || '*');
       }
       res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept');
 
       if (req.method === 'OPTIONS') {
         res.writeHead(204);
         res.end();
-        return;
+        return true;
       }
+      return false;
+    };
 
-      // Healthcheck endpoint
+    const httpServer = http.createServer(async (req, res) => {
+      if (applyCors(req, res)) return;
+
+      // --- Healthcheck ---
       if (req.url === '/health' && req.method === 'GET') {
         try {
           const conn = await this.pool.getConnection();
@@ -685,19 +713,76 @@ export class MariaDBServer {
         return;
       }
 
-      // Ruta no encontrada
+      // --- SSE: abrir stream para una sesión ---
+      if (req.url === '/sse' && req.method === 'GET') {
+        const transport = new SSEServerTransport('/messages', res);
+        const sessionServer = this._createSessionServer();
+        sessions.set(transport.sessionId, { transport, server: sessionServer });
+        logger.info(`Sesión SSE abierta: ${transport.sessionId} (activas: ${sessions.size})`);
+
+        transport.onclose = () => {
+          sessions.delete(transport.sessionId);
+          logger.info(`Sesión SSE cerrada: ${transport.sessionId} (activas: ${sessions.size})`);
+        };
+        transport.onerror = (error) => {
+          logger.error(`Error en sesión SSE ${transport.sessionId}:`, error);
+        };
+
+        try {
+          await sessionServer.connect(transport);
+        } catch (error) {
+          logger.error('Error conectando sesión SSE:', error);
+          sessions.delete(transport.sessionId);
+          if (!res.headersSent) {
+            res.writeHead(500);
+            res.end('Error de sesión SSE');
+          }
+        }
+        return;
+      }
+
+      // --- POST: recibir mensajes del cliente ---
+      if (req.url && req.url.startsWith('/messages') && req.method === 'POST') {
+        const url = new URL(req.url, 'http://localhost');
+        const sessionId = url.searchParams.get('sessionId');
+        const session = sessionId ? sessions.get(sessionId) : undefined;
+
+        if (!session) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'sessionId inválido o sesión no encontrada' }));
+          return;
+        }
+
+        try {
+          await session.transport.handlePostMessage(req, res);
+        } catch (error) {
+          logger.error(`Error procesando mensaje de sesión ${sessionId}:`, error);
+          if (!res.headersSent) {
+            res.writeHead(500);
+            res.end('Error procesando mensaje');
+          }
+        }
+        return;
+      }
+
+      // --- Ruta no encontrada ---
       res.writeHead(404, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ error: 'Not found' }));
     });
 
     httpServer.listen(port, () => {
-      logger.info(`Servidor HTTP (${this.serverName}) escuchando en puerto ${port}`);
+      logger.info(`Servidor HTTP/SSE (${this.serverName}) escuchando en puerto ${port}`);
+      logger.info(`SSE:         http://localhost:${port}/sse`);
       logger.info(`Healthcheck: http://localhost:${port}/health`);
     });
 
-    // Manejo graceful de cierre
+    // Manejo graceful de cierre: cierra sesiones, pool y servidor HTTP
     const shutdown = async () => {
-      logger.info('Cerrando servidor HTTP...');
+      logger.info('Cerrando servidor HTTP/SSE...');
+      for (const { transport } of sessions.values()) {
+        try { await transport.close(); } catch { /* sesión ya cerrada */ }
+      }
+      sessions.clear();
       httpServer.close();
       if (this.pool) await this.pool.end();
       process.exit(0);
