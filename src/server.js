@@ -1,11 +1,12 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { SSEServerTransport } from '@modelcontextprotocol/sdk/server/sse.js';
+import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
 import {
   ListToolsRequestSchema,
   CallToolRequestSchema
 } from '@modelcontextprotocol/sdk/types.js';
 import http from 'http';
+import { randomUUID } from 'crypto';
 import mysql from 'mysql2/promise';
 import fs from 'fs';
 import path from 'path';
@@ -655,18 +656,21 @@ export class MariaDBServer {
   }
 
   /**
-   * Inicia el servidor MCP por HTTP/SSE con endpoint /health para orquestadores.
+   * Inicia el servidor MCP por HTTP con transporte Streamable HTTP (protocolo 2025-03-26).
+   * Compatible con clientes MCP modernos: Claude Desktop, Cursor, Hermes Agent, VS Code Copilot.
+   *
    * Expone:
-   *   GET  /health             → estado del servidor y pool de conexiones
-   *   GET  /sse                → abre el stream SSE para una sesión cliente
-   *   POST /messages?sessionId → recibe mensajes JSON-RPC del cliente
+   *   GET  /health   → estado del servidor y pool de conexiones
+   *   POST /mcp      → endpoint MCP unificado (Streamable HTTP)
+   *   GET  /mcp      → abre stream SSE para una sesión existente
+   *   DELETE /mcp    → cierra una sesión
    */
   async runHttp(port = 3000) {
     await this.initializePool();
 
     const allowedOrigins = getAllowedOrigins();
 
-    // Sesiones SSE activas: sessionId -> { transport, server }
+    // Sesiones activas: sessionId -> { transport, server }
     const sessions = new Map();
 
     /** Aplica cabeceras CORS y responde OPTIONS. Devuelve true si ya respondió. */
@@ -675,8 +679,8 @@ export class MariaDBServer {
       if (allowedOrigins.length === 0 || allowedOrigins.includes(origin)) {
         res.setHeader('Access-Control-Allow-Origin', origin || '*');
       }
-      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept');
+      res.setHeader('Access-Control-Allow-Methods', 'GET, POST, DELETE, OPTIONS');
+      res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Accept, Mcp-Session-Id');
 
       if (req.method === 'OPTIONS') {
         res.writeHead(204);
@@ -705,80 +709,124 @@ export class MariaDBServer {
           }));
         } catch (error) {
           res.writeHead(503, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({
-            status: 'unhealthy',
-            error: error.message
-          }));
+          res.end(JSON.stringify({ status: 'unhealthy', error: error.message }));
         }
         return;
       }
 
-      // --- SSE: abrir stream para una sesión ---
-      if (req.url === '/sse' && req.method === 'GET') {
-        const transport = new SSEServerTransport('/messages', res);
-        const sessionServer = this._createSessionServer();
-        sessions.set(transport.sessionId, { transport, server: sessionServer });
-        logger.info(`Sesión SSE abierta: ${transport.sessionId} (activas: ${sessions.size})`);
-
-        transport.onclose = () => {
-          sessions.delete(transport.sessionId);
-          logger.info(`Sesión SSE cerrada: ${transport.sessionId} (activas: ${sessions.size})`);
-        };
-        transport.onerror = (error) => {
-          logger.error(`Error en sesión SSE ${transport.sessionId}:`, error);
-        };
-
-        try {
-          await sessionServer.connect(transport);
-        } catch (error) {
-          logger.error('Error conectando sesión SSE:', error);
-          sessions.delete(transport.sessionId);
-          if (!res.headersSent) {
-            res.writeHead(500);
-            res.end('Error de sesión SSE');
-          }
-        }
+      // --- Endpoint MCP (debe ser /mcp) ---
+      const url = new URL(req.url || '/', 'http://localhost');
+      if (url.pathname !== '/mcp') {
+        res.writeHead(404, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Not found' }));
         return;
       }
 
-      // --- POST: recibir mensajes del cliente ---
-      if (req.url && req.url.startsWith('/messages') && req.method === 'POST') {
-        const url = new URL(req.url, 'http://localhost');
-        const sessionId = url.searchParams.get('sessionId');
+      // DELETE: cierre de sesión
+      if (req.method === 'DELETE') {
+        const sessionId = req.headers['mcp-session-id'];
         const session = sessionId ? sessions.get(sessionId) : undefined;
-
         if (!session) {
-          res.writeHead(400, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ error: 'sessionId inválido o sesión no encontrada' }));
+          res.writeHead(404, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Sesión no encontrada' }));
           return;
         }
-
         try {
-          await session.transport.handlePostMessage(req, res);
+
+          await session.transport.close();
+          sessions.delete(sessionId);
+          res.writeHead(200, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ status: 'closed' }));
         } catch (error) {
-          logger.error(`Error procesando mensaje de sesión ${sessionId}:`, error);
+          logger.error(`Error cerrando sesión ${sessionId}:`, error);
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Error cerrando sesión' }));
+        }
+        return;
+      }
+
+      // GET: reanudar sesión SSE existente
+      if (req.method === 'GET') {
+        const sessionId = req.headers['mcp-session-id'];
+        const session = sessionId ? sessions.get(sessionId) : undefined;
+        if (!session) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Sesión no encontrada. Primero envía un POST con initialize.' }));
+          return;
+        }
+        try {
+          await session.transport.handleRequest(req, res);
+        } catch (error) {
+          logger.error(`Error en GET /mcp sesión ${sessionId}:`, error);
           if (!res.headersSent) {
             res.writeHead(500);
-            res.end('Error procesando mensaje');
+            res.end('Error procesando sesión');
           }
         }
         return;
       }
 
-      // --- Ruta no encontrada ---
-      res.writeHead(404, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: 'Not found' }));
+      if (req.method !== 'POST') {
+        res.writeHead(405, { 'Content-Type': 'application/json' });
+        res.end(JSON.stringify({ error: 'Método no permitido' }));
+        return;
+      }
+
+      // POST: procesar mensajes (initialize, tools/call, etc.)
+      const sessionId = req.headers['mcp-session-id'];
+      let session;
+      let transport;
+
+      if (sessionId && sessions.has(sessionId)) {
+        // Reanudar sesión existente
+        session = sessions.get(sessionId);
+        transport = session.transport;
+      } else {
+        // Crear nueva sesión
+        const sessionServer = this._createSessionServer();
+        transport = new StreamableHTTPServerTransport({
+          sessionIdGenerator: () => randomUUID(),
+          onsessioninitialized: (newSessionId) => {
+            sessions.set(newSessionId, { transport, server: sessionServer });
+            logger.info(`Sesión MCP iniciada: ${newSessionId} (activas: ${sessions.size})`);
+          }
+        });
+
+        transport.onclose = () => {
+          if (transport.sessionId) {
+            sessions.delete(transport.sessionId);
+            logger.info(`Sesión MCP cerrada: ${transport.sessionId} (activas: ${sessions.size})`);
+          }
+        };
+
+        transport.onerror = (error) => {
+          logger.error(`Error en sesión MCP ${transport.sessionId}:`, error);
+        };
+
+        await sessionServer.connect(transport);
+        session = { transport, server: sessionServer };
+      }
+
+      try {
+        await transport.handleRequest(req, res, req.body);
+      } catch (error) {
+        logger.error(`Error procesando mensaje en sesión ${transport.sessionId}:`, error);
+        if (!res.headersSent) {
+          res.writeHead(500, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({ error: 'Error procesando mensaje' }));
+        }
+      }
     });
 
     httpServer.listen(port, () => {
-      logger.info(`Servidor HTTP/SSE (${this.serverName}) escuchando en puerto ${port}`);
-      logger.info(`SSE:         http://localhost:${port}/sse`);
-      logger.info(`Healthcheck: http://localhost:${port}/health`);
+      logger.info(`Servidor MCP HTTP (${this.serverName}) escuchando en puerto ${port}`);
+      logger.info(`MCP endpoint: http://localhost:${port}/mcp`);
+      logger.info(`Healthcheck:  http://localhost:${port}/health`);
     });
 
     // Manejo graceful de cierre: cierra sesiones, pool y servidor HTTP
     const shutdown = async () => {
-      logger.info('Cerrando servidor HTTP/SSE...');
+      logger.info('Cerrando servidor MCP HTTP...');
       for (const { transport } of sessions.values()) {
         try { await transport.close(); } catch { /* sesión ya cerrada */ }
       }
