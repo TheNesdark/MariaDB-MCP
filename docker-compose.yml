@@ -23,7 +23,7 @@ services:
       - ALLOWED_ORIGINS=${ALLOWED_ORIGINS}
       - ALLOWED_HOSTS=${ALLOWED_HOSTS}
     volumes:
-      - ./logs:/app/logs
+      - mcp_logs:/app/logs
       # SSL certs: descomentar solo si DB_SSL=true y los certificados existen
       # - ./ssl/ca.pem:/certs/ca.pem:ro
       # - ./ssl/client-cert.pem:/certs/client-cert.pem:ro
@@ -49,3 +49,6 @@ services:
   ## Para HTTP (servidor permanente):
   ##   docker compose up -d
   ##   Luego configurar el cliente MCP con url: http://localhost:3000
+
+volumes:
+  mcp_logs:
