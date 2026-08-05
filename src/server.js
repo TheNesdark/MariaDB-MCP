@@ -298,7 +298,7 @@ export class MariaDBServer {
       try {
         connection = await this.pool.getConnection();
 
-        if (database && database !== DB_NAME) {
+        if (database) {
           await connection.execute(`USE \`${database}\``);
         }
 
